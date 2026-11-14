@@ -1,4 +1,4 @@
-"""Forever Gold Companion 0.4 — PySide6 dark trading-terminal UI."""
+"""Forever Gold Companion 0.5 — PySide6 dark trading-terminal UI."""
 import csv
 import datetime as dt
 import os
@@ -11,7 +11,7 @@ from PySide6.QtCore import Qt, Signal, QObject
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QGridLayout, QLabel, QPushButton, QFrame, QLineEdit, QComboBox, QCheckBox,
     QStackedWidget, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog,
-    QMessageBox, QAbstractItemView, QScrollArea)
+    QMessageBox, QAbstractItemView, QScrollArea, QTabBar)
 
 from engine import PROFESSIONS, optimize, build_price_book
 from data_sources import (fetch_recipes, recipes_for, fetch_auctions, latest_prices,
@@ -50,6 +50,9 @@ QHeaderView::section { background: #1C2A3B; color: #AFC0D5; border: none;
  border-bottom: 1px solid #314157; padding: 10px; font-weight: 700; }
 QTableWidget::item { padding: 6px; }
 QCheckBox { spacing: 9px; }
+QTabBar::tab { background: #1B2939; border: 1px solid #34445B; padding: 11px 18px; color: #AFC0D5; }
+QTabBar::tab:selected { background: #145847; color: #F4FFFA; border-bottom: 2px solid #57DEBA; }
+QTabBar::tab:hover { background: #2B4158; }
 QScrollBar:vertical { background: #111A26; width: 10px; }
 QScrollBar::handle:vertical { background: #34465B; border-radius: 4px; }
 '''
@@ -109,10 +112,10 @@ class MainWindow(QMainWindow):
         sidebar = QFrame(); sidebar.setObjectName('sidebar'); sidebar.setFixedWidth(236)
         side = QVBoxLayout(sidebar); side.setContentsMargins(16,25,16,18); side.setSpacing(9)
         side.addWidget(text_label('◈  FOREVER', 'brand'))
-        side.addWidget(text_label('GOLD COMPANION   /   v0.4', 'muted'))
+        side.addWidget(text_label('GOLD COMPANION   /   v0.5', 'muted'))
         side.addSpacing(28)
         self.nav=[]
-        for i, (icon, name) in enumerate([('▦','Overview'),('▤','Profession planner'),('↗','Market scanner'),('◷','Price history'),('⚙','Connections')]):
+        for i, (icon, name) in enumerate([('▦','Overview'),('▤','Profession planner'),('↗','Market scanner'),('▥','Auction browser'),('◷','Price history'),('⚙','Connections')]):
             b=QPushButton(f'{icon}   {name}'); b.setObjectName('nav'); b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.clicked.connect(lambda _, ix=i: self.go(ix)); side.addWidget(b); self.nav.append(b)
         side.addStretch()
@@ -128,7 +131,7 @@ class MainWindow(QMainWindow):
         self.status=text_label('Ready. Import real auction CSV data or configure an experimental connection.', 'muted', True)
         main.addWidget(self.status)
         outer.addWidget(right,1)
-        self.make_overview(); self.make_professions(); self.make_market(); self.make_history(); self.make_connections()
+        self.make_overview(); self.make_professions(); self.make_market(); self.make_browser(); self.make_history(); self.make_connections()
         self.go(0); self.update_overview()
 
     def page(self, title, subtitle):
@@ -148,7 +151,7 @@ class MainWindow(QMainWindow):
         box,l=panel(); l.addWidget(text_label('START HERE','section'))
         l.addWidget(text_label('1  Import an auction CSV (item_id, quantity, unit_copper).\n2  Import verified vendor values to scan for below-vendor deals.\n3  Add verified profession recipes to calculate levelling routes.\n4  Repeat imports over time to build an observed price history.','muted',True))
         row=QHBoxLayout()
-        for title,fn in [('Import auction CSV',self.import_ah),('Open market scanner',lambda:self.go(2)),('Configure sources',lambda:self.go(4))]:
+        for title,fn in [('Import auction CSV',self.import_ah),('Open market scanner',lambda:self.go(2)),('Configure sources',lambda:self.go(5))]:
             b=QPushButton(title); b.clicked.connect(fn); row.addWidget(b)
         l.addLayout(row); lay.addWidget(box)
         box,l=panel(); l.addWidget(text_label('DATA INTEGRITY','section'))
@@ -185,6 +188,103 @@ class MainWindow(QMainWindow):
         l.addWidget(self.deal_table); lay.addWidget(box)
         lay.addWidget(text_label('Potential profit ignores travel, auction rules, and availability changes. Verify values before purchasing.','muted',True))
 
+    def make_browser(self):
+        lay=self.page('Auction house browser', 'Browse the latest AH snapshot by item category. Prices are asking prices, not confirmed sales.')
+        box,l=panel()
+        actions=QHBoxLayout()
+        self.browser_search=QLineEdit(); self.browser_search.setPlaceholderText('Search item name or ID...')
+        self.browser_search.textChanged.connect(self.refresh_browser)
+        actions.addWidget(self.browser_search, 1)
+        import_btn=QPushButton('Import item catalogue CSV'); import_btn.clicked.connect(self.import_catalogue)
+        actions.addWidget(import_btn)
+        reload_btn=QPushButton('Reload'); reload_btn.clicked.connect(self.refresh_browser); actions.addWidget(reload_btn)
+        l.addLayout(actions)
+        l.addWidget(text_label('Catalogue columns: item_id,name,category,subcategory. Unmatched items remain under Uncategorised; no category is guessed.', 'muted',True))
+        lay.addWidget(box)
+        self.category_tabs=QTabBar(); self.category_tabs.setExpanding(False); self.category_tabs.setUsesScrollButtons(True)
+        self.category_tabs.currentChanged.connect(self.category_changed)
+        lay.addWidget(self.category_tabs)
+        self.subcategory_tabs=QTabBar(); self.subcategory_tabs.setExpanding(False); self.subcategory_tabs.setUsesScrollButtons(True)
+        self.subcategory_tabs.currentChanged.connect(self.refresh_browser)
+        lay.addWidget(self.subcategory_tabs)
+        self.browser_note=text_label('Import a catalogue to classify auction items.', 'muted'); lay.addWidget(self.browser_note)
+        box,l=panel()
+        self.browser_table=table(['Item ID','Item name','Category','Subcategory','Listings','Quantity','Lowest (g)','Average (g)'])
+        self.browser_table.setSortingEnabled(True)
+        l.addWidget(self.browser_table)
+        lay.addWidget(box)
+        self.refresh_browser()
+
+    def import_catalogue(self):
+        path,_=QFileDialog.getOpenFileName(self,'Import item catalogue CSV','','CSV files (*.csv)')
+        if not path:return
+        try:
+            values=[]
+            with open(path,encoding='utf-8-sig',newline='') as f:
+                reader=csv.DictReader(f)
+                required={'item_id','name','category','subcategory'}
+                if not required.issubset(set(reader.fieldnames or [])):
+                    raise ValueError('Catalogue requires columns: item_id,name,category,subcategory')
+                for row in reader:
+                    item=int(row['item_id'])
+                    if item>0:
+                        values.append((item,(row['name'] or '').strip(),(row['category'] or 'Uncategorised').strip() or 'Uncategorised',
+                                       (row['subcategory'] or 'Other').strip() or 'Other'))
+            with connect() as db:
+                db.execute('CREATE TABLE IF NOT EXISTS item_catalogue (item_id INTEGER PRIMARY KEY, name TEXT, category TEXT, subcategory TEXT)')
+                db.executemany('INSERT OR REPLACE INTO item_catalogue VALUES (?,?,?,?)',values)
+            self.refresh_browser()
+            self.set_status(f'Imported {len(values):,} item catalogue records.')
+        except Exception as e:self.show_error(str(e))
+
+    def category_changed(self, _=None):
+        cat=self.category_tabs.tabData(self.category_tabs.currentIndex())
+        self.subcategory_tabs.blockSignals(True)
+        self.subcategory_tabs.clear()
+        self.subcategory_tabs.addTab('All'); self.subcategory_tabs.setTabData(0,'All')
+        for sub in sorted({r[3] for r in getattr(self,'browser_rows',[]) if cat=='All' or r[2]==cat}):
+            i=self.subcategory_tabs.addTab(sub); self.subcategory_tabs.setTabData(i,sub)
+        self.subcategory_tabs.blockSignals(False)
+        self.refresh_browser()
+
+    def refresh_browser(self, _=None):
+        if not hasattr(self,'browser_table'):return
+        try:
+            with connect() as db:
+                db.execute('CREATE TABLE IF NOT EXISTS item_catalogue (item_id INTEGER PRIMARY KEY, name TEXT, category TEXT, subcategory TEXT)')
+                house=self.house_id()
+                latest=db.execute('SELECT MAX(captured) FROM prices WHERE house=?',(house,)).fetchone()[0]
+                if latest:
+                    data=db.execute("""SELECT p.item_id, COALESCE(NULLIF(c.name, ''), 'Unknown item'),
+                        COALESCE(NULLIF(c.category, ''), 'Uncategorised'),
+                        COALESCE(NULLIF(c.subcategory, ''), 'Other'), COUNT(*), SUM(p.quantity),
+                        MIN(p.unit_copper), SUM(p.unit_copper*p.quantity)/SUM(p.quantity)
+                        FROM prices p LEFT JOIN item_catalogue c ON p.item_id=c.item_id
+                        WHERE p.house=? AND p.captured=? GROUP BY p.item_id,c.name,c.category,c.subcategory""",(house,latest)).fetchall()
+                else:data=[]
+            self.browser_rows=data
+            current=self.category_tabs.tabData(self.category_tabs.currentIndex()) or 'All'
+            categories=['All','Trade Goods','Armor','Weapons','Consumables','Recipes','Gems','Miscellaneous','Uncategorised']
+            categories += sorted({r[2] for r in data}.difference(categories))
+            if [self.category_tabs.tabData(i) for i in range(self.category_tabs.count())]!=categories:
+                self.category_tabs.blockSignals(True); self.category_tabs.clear()
+                for cat in categories:
+                    ix=self.category_tabs.addTab(cat);self.category_tabs.setTabData(ix,cat)
+                self.category_tabs.setCurrentIndex(categories.index(current) if current in categories else 0)
+                self.category_tabs.blockSignals(False)
+                self.category_changed()
+                return
+            category=self.category_tabs.tabData(self.category_tabs.currentIndex()) or 'All'
+            sub=self.subcategory_tabs.tabData(self.subcategory_tabs.currentIndex()) or 'All'
+            query=self.browser_search.text().strip().lower()
+            filtered=[r for r in data if (category=='All' or r[2]==category) and (sub=='All' or r[3]==sub)
+                      and (not query or query in str(r[0]) or query in r[1].lower())]
+            self.browser_table.setSortingEnabled(False)
+            fill_table(self.browser_table,[(r[0],r[1],r[2],r[3],r[4],f'{r[5]:,.0f}',f'{r[6]/10000:,.4f}',f'{r[7]/10000:,.4f}') for r in filtered[:5000]])
+            self.browser_table.setSortingEnabled(True)
+            self.browser_note.setText(f'{len(filtered):,} items in selection • Showing up to 5,000 • Snapshot: {latest or "none"} • {len(data):,} unique items total')
+        except Exception as e:self.browser_note.setText(f'Browser unavailable: {e}')
+
     def make_history(self):
         lay=self.page('Price history', 'Observed minimum buyouts grouped by capture hour (UTC).')
         box,l=panel(); row=QHBoxLayout(); self.history_item=QLineEdit(); self.history_item.setPlaceholderText('Enter item ID')
@@ -212,6 +312,7 @@ class MainWindow(QMainWindow):
         for i,b in enumerate(self.nav):
             b.setProperty('active','true' if i==index else 'false'); b.style().unpolish(b); b.style().polish(b)
         if index==0:self.update_overview()
+        if index==3:self.refresh_browser()
 
     def set_status(self,msg):
         self.status.setText(msg); self.update_overview()
@@ -254,6 +355,7 @@ class MainWindow(QMainWindow):
             stamp=dt.datetime.now(dt.timezone.utc).isoformat(); house=self.house_id()
             with connect() as db: db.executemany('INSERT INTO prices VALUES (?,?,?,?,?)',[(house,stamp,*r) for r in records])
             self.set_status(f'Imported {len(records):,} listings at {stamp} (AH {house}).')
+            self.refresh_browser()
         except Exception as e:self.show_error(str(e))
 
     def import_vendor(self):
