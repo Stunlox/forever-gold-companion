@@ -6,7 +6,7 @@ AppId={{9E49791C-4D7F-46EA-9759-80B61F8E1A7F}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher=Forever Gold Companion Community Project
-DefaultDirName={autopf}\Forever Gold Companion
+DefaultDirName={localappdata}\Programs\Forever Gold Companion
 DefaultGroupName=Forever Gold Companion
 OutputDir=output
 OutputBaseFilename=ForeverGoldCompanion_Setup_0.3.0
@@ -14,7 +14,6 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
 UninstallDisplayIcon={app}\{#MyAppExeName}
 ArchitecturesAllowed=x64compatible
 [Files]

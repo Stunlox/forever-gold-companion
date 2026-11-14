@@ -29,3 +29,6 @@ Forever-specific recipe and item data is intended to be sourced from [ForeverDB.
 
 ## Testing
 `python -m unittest discover -s tests -v` for maintainers. Windows UI and API integrations still need real-world testing.
+
+## Installer note
+The installer targets the current user’s LocalAppData Programs folder, avoiding administrator permissions. Windows binaries are produced by the GitHub Actions workflow, not included in this source archive.
