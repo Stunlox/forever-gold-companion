@@ -1,94 +1,30 @@
+# Forever Gold Companion
 
+**Unofficial Windows desktop app prototype for World of Warcraft Forever.** Initially targeting **EU PvP Alliance**.
 
+The goal is to calculate affordable profession levelling routes using Forever-specific standard-trainer recipes and auction prices, and to identify gold-making opportunities.
 
+## Planned features
+- Cheapest profession levelling route and consolidated material shopping list
+- Historical auction prices, hourly and day-of-week market patterns
+- Deals compared with historical prices and liquidity
+- Vendor arbitrage (buyout below NPC sell price)
+- Crafting profitability, watchlists, and CSV exports
 
-WoW Forever Gold Companion
+## Technology
+Planned: Python, PySide6, SQLite, and a standalone Windows executable.
 
-A powerful desktop application designed to help World of Warcraft Forever players maximise their gold, optimise profession levelling, and identify profitable auction house opportunities.
+## Status
+**Early prototype.** Live API access, recipe coverage, auction-house IDs, vendor values and skill-up probabilities have not yet been validated. Demonstration prices are fictional.
 
-Overview
+## Data providers and attribution
+We are seeking access to [ForeverDB.net](https://foreverdb.net) for Forever-specific recipes, reagent requirements, trainer availability, skill thresholds and item metadata. ForeverDB.net will be visibly credited with a clickable link wherever its data is displayed, subject to its API terms and approval.
 
-Forever Gold Companion is a free, non-commercial Windows application currently in development, initially focused on the EU PvP Alliance auction house.
+We intend to use Blizzard's developer API for auction data **if Forever endpoints are verified and supported**. Credentials will remain on the user's PC and will not be committed to this repository.
 
-The goal is to combine WoW Forever-specific profession data with auction house pricing and historical market trends to help players make smarter economic decisions.
+This project is not affiliated with or endorsed by Blizzard Entertainment.
 
-Key Features
+See [ROADMAP.md](ROADMAP.md) and [data sources](docs/DATA_SOURCES.md).
 
-1. Profession Levelling Optimiser
-
-- Calculate the cheapest route to level professions from 1–300.
-- Use WoW Forever-specific recipes available from standard profession trainers.
-- Compare material costs using auction house prices.
-- Account for recipe difficulty and expected skill-up rates.
-- Identify when crafting intermediate materials is cheaper than purchasing them.
-- Generate complete shopping lists and crafting instructions.
-
-2. Auction House Market Intelligence
-
-- Track auction house prices over time.
-- Analyse price fluctuations by hour and day of the week.
-- Identify historically favourable buying and selling windows.
-- Compare current prices against historical averages.
-- Track market supply and price volatility.
-
-3. Deal Sniper
-
-- Identify items listed significantly below their typical market value.
-- Calculate potential resale profits after auction house fees.
-- Highlight profitable opportunities based on historical pricing.
-- Monitor selected items for price drops.
-
-4. Vendor Arbitrage
-
-- Detect items listed below their NPC vendor sell price.
-- Calculate potential guaranteed vendor resale margins, subject to item restrictions and verified vendor values.
-- Highlight opportunities to purchase items cheaply and sell them directly to NPC vendors.
-
-5. Crafting Profit Calculator
-
-- Compare crafting material costs against finished item prices.
-- Identify potentially profitable recipes.
-- Account for intermediate crafting, auction house fees and estimated resale values.
-
-6. Watchlists and Alerts
-
-- Create personalised item watchlists.
-- Set target purchase and selling prices.
-- Receive desktop notifications when tracked opportunities are detected.
-
-Technical Architecture
-
-The application is being developed using:
-
-- Python — Data collection and optimisation algorithms.
-- PySide6 / Qt — Native Windows desktop interface.
-- SQLite — Local storage of historical prices and recipe information.
-- Blizzard API — Intended source of auction house data, subject to verification of WoW Forever support.
-- ForeverDB API — Proposed source of WoW Forever-specific profession recipes, item information, reagents, skill thresholds and NPC vendor values, subject to API approval.
-
-Data Sources and Attribution
-
-This project intends to use data provided by "ForeverDB.net" (https://foreverdb.net), subject to approval and its API usage requirements.
-
-ForeverDB will receive visible attribution within the application, including a clickable link wherever its data is displayed.
-
-Recipe and item metadata will be cached locally to reduce unnecessary API requests. Refresh intervals will respect provider rate limits and usage policies.
-
-Auction house data will be collected separately, where supported, and stored locally for historical analysis.
-
-Development Status
-
-Early development / prototype stage.
-
-The desktop interface and calculation engine are being prototyped. Live API integrations, recipe accuracy and market calculations still require validation.
-
-Future plans include releasing a standalone Windows executable and potentially making the application available to the wider WoW Forever community.
-
-Disclaimer
-
-Forever Gold Companion is an independent, unofficial community project and is not affiliated with or endorsed by Blizzard Entertainment.
-
-World of Warcraft and associated trademarks belong to their respective owners.
-
-This project is intended for personal, non-commercial use during initial development.
-
+## License
+No open-source license has been granted at this stage.
