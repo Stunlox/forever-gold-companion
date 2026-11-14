@@ -1,5 +1,5 @@
 #define MyAppName "Forever Gold Companion"
-#define MyAppVersion "0.5.0"
+#define MyAppVersion "0.6.0"
 #define MyAppExeName "ForeverGoldCompanion.exe"
 [Setup]
 AppId={{9E49791C-4D7F-46EA-9759-80B61F8E1A7F}
@@ -9,7 +9,7 @@ AppPublisher=Forever Gold Companion Community Project
 DefaultDirName={localappdata}\Programs\Forever Gold Companion
 DefaultGroupName=Forever Gold Companion
 OutputDir=output
-OutputBaseFilename=ForeverGoldCompanion_Setup_0.5.0
+OutputBaseFilename=ForeverGoldCompanion_Setup_0.6.0
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern

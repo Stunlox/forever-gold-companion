@@ -1,4 +1,4 @@
-"""Forever Gold Companion 0.5 — PySide6 dark trading-terminal UI."""
+"""Forever Gold Companion 0.6 — PySide6 dark trading-terminal UI."""
 import csv
 import datetime as dt
 import os
@@ -11,9 +11,10 @@ from PySide6.QtCore import Qt, Signal, QObject
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QGridLayout, QLabel, QPushButton, QFrame, QLineEdit, QComboBox, QCheckBox,
     QStackedWidget, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog,
-    QMessageBox, QAbstractItemView, QScrollArea, QTabBar)
+    QMessageBox, QAbstractItemView, QScrollArea, QTabBar, QDialog, QDialogButtonBox)
 
 from engine import PROFESSIONS, optimize, build_price_book
+from diagnostics import planner_diagnostics, format_auction_houses
 from data_sources import (fetch_recipes, recipes_for, fetch_auctions, latest_prices,
                           auction_houses, oauth, connect)
 
@@ -60,6 +61,7 @@ QScrollBar::handle:vertical { background: #34465B; border-radius: 4px; }
 class Bridge(QObject):
     done = Signal(str)
     failed = Signal(str)
+    houses = Signal(list)
 
 
 def text_label(text, kind=None, wrap=False):
@@ -106,13 +108,14 @@ class MainWindow(QMainWindow):
         self.bridge = Bridge()
         self.bridge.done.connect(self.set_status)
         self.bridge.failed.connect(self.show_error)
+        self.bridge.houses.connect(self.show_houses)
         self.result = None
         root = QWidget(); self.setCentralWidget(root)
         outer = QHBoxLayout(root); outer.setContentsMargins(0,0,0,0); outer.setSpacing(0)
         sidebar = QFrame(); sidebar.setObjectName('sidebar'); sidebar.setFixedWidth(236)
         side = QVBoxLayout(sidebar); side.setContentsMargins(16,25,16,18); side.setSpacing(9)
         side.addWidget(text_label('◈  FOREVER', 'brand'))
-        side.addWidget(text_label('GOLD COMPANION   /   v0.5', 'muted'))
+        side.addWidget(text_label('GOLD COMPANION   /   v0.6', 'muted'))
         side.addSpacing(28)
         self.nav=[]
         for i, (icon, name) in enumerate([('▦','Overview'),('▤','Profession planner'),('↗','Market scanner'),('▥','Auction browser'),('◷','Price history'),('⚙','Connections')]):
@@ -132,7 +135,7 @@ class MainWindow(QMainWindow):
         main.addWidget(self.status)
         outer.addWidget(right,1)
         self.make_overview(); self.make_professions(); self.make_market(); self.make_browser(); self.make_history(); self.make_connections()
-        self.go(0); self.update_overview()
+        self.go(0); self.update_overview(); self.update_planner_diagnostics()
 
     def page(self, title, subtitle):
         scroll=QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -161,12 +164,14 @@ class MainWindow(QMainWindow):
     def make_professions(self):
         lay=self.page('Profession planner', 'Estimate the cheapest levelling route from imported recipes and your current auction snapshot.')
         box,l=panel(); grid=QGridLayout();
-        self.prof=QComboBox(); self.prof.addItems(PROFESSIONS)
+        self.prof=QComboBox(); self.prof.addItems(PROFESSIONS); self.prof.currentTextChanged.connect(self.update_planner_diagnostics)
         self.start=QLineEdit('1'); self.target=QLineEdit('300')
         self.verified=QCheckBox('Require verified trainer recipes')
         for i,(name,widget) in enumerate([('Profession',self.prof),('Current skill',self.start),('Target skill',self.target)]):
             grid.addWidget(text_label(name,'eyebrow'),0,i); grid.addWidget(widget,1,i)
         l.addLayout(grid); l.addWidget(self.verified)
+        self.planner_health=text_label('Checking local data…','muted',True); l.addWidget(self.planner_health)
+        check=QPushButton('Check data availability'); check.clicked.connect(self.update_planner_diagnostics); l.addWidget(check)
         btn=QPushButton('Calculate cheapest route'); btn.setObjectName('primary'); btn.clicked.connect(self.calculate); l.addWidget(btn)
         lay.addWidget(box)
         self.route_summary=text_label('No route calculated yet.','section'); lay.addWidget(self.route_summary)
@@ -315,7 +320,19 @@ class MainWindow(QMainWindow):
         if index==3:self.refresh_browser()
 
     def set_status(self,msg):
-        self.status.setText(msg); self.update_overview()
+        self.status.setText(msg); self.update_overview(); self.update_planner_diagnostics()
+
+    def update_planner_diagnostics(self, _=None):
+        if not hasattr(self, 'planner_health'): return
+        try:
+            house=self.house_id()
+            with connect() as db:
+                snapshot=db.execute('SELECT MAX(captured) FROM prices WHERE house=?',(house,)).fetchone()[0]
+                listing_count=db.execute('SELECT COUNT(*) FROM prices WHERE house=? AND captured=?',(house,snapshot)).fetchone()[0] if snapshot else 0
+                recipe_count=db.execute('SELECT COUNT(*) FROM recipes WHERE profession=?',(self.prof.currentText(),)).fetchone()[0]
+            self.planner_health.setText(planner_diagnostics(self.prof.currentText(),house,recipe_count,listing_count,snapshot))
+        except Exception as e:
+            self.planner_health.setText('Unable to inspect local data: '+str(e))
 
     def show_error(self,msg):
         self.status.setText('Error: '+msg)
@@ -394,7 +411,8 @@ class MainWindow(QMainWindow):
             start=int(self.start.text()); target=int(self.target.text())
             if not 1<=start<target<=300:raise ValueError('Skill must satisfy 1 ≤ current < target ≤ 300')
             recipes=recipes_for(self.prof.currentText()); prices,stamp=latest_prices(self.house_id())
-            if not recipes or not prices:raise ValueError('Import profession recipes and an auction snapshot first')
+            if not recipes:raise ValueError(f'No {self.prof.currentText()} recipes saved. On Connections, import recipes for this profession and check the returned count and ForeverDB API response.')
+            if not prices:raise ValueError(f'No usable auction listings for AH {self.house_id()}. Refresh this exact AH ID and check the imported listing count.')
             result=optimize(recipes,build_price_book(prices),start,target,require_verified=self.verified.isChecked())
             if 'error' in result:raise ValueError(result['error'])
             self.result=result
@@ -433,7 +451,31 @@ class MainWindow(QMainWindow):
 
     def discover(self):
         client=self.client.text();secret=self.secret.text()
-        self.job('Discovering AH IDs',lambda:'AH IDs (verify realm): '+str(auction_houses(oauth(client,secret)))[:700])
+        if not client or not secret:return self.show_error('Enter Blizzard client ID and secret first.')
+        def load():
+            return format_auction_houses(auction_houses(oauth(client,secret)))
+        self.status.setText('Discovering auction houses …')
+        def worker():
+            try:self.bridge.houses.emit(load())
+            except Exception as e:self.bridge.failed.emit(f'{type(e).__name__}: {e}')
+        self.pool.submit(worker)
+
+    def show_houses(self, rows):
+        dialog=QDialog(self); dialog.setWindowTitle('Discovered auction houses')
+        dialog.resize(680,440)
+        layout=QVBoxLayout(dialog)
+        layout.addWidget(text_label('Select an auction house ID. Verify the realm mapping before using prices.', 'muted', True))
+        widget=table(['AH ID','English name','API endpoint'])
+        widget.setMinimumHeight(290)
+        fill_table(widget,rows)
+        layout.addWidget(widget)
+        buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept); buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec()==QDialog.DialogCode.Accepted and widget.currentRow()>=0:
+            item=widget.item(widget.currentRow(),0)
+            if item:self.house.setText(item.text());self.update_planner_diagnostics();self.set_status('Selected AH '+item.text()+'. Verify its realm before importing.')
+
 
     def refresh(self):
         client=self.client.text();secret=self.secret.text()
