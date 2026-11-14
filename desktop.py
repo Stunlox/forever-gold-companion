@@ -1,169 +1,356 @@
-"""Native Windows-friendly UI for the Forever profession optimiser."""
-import csv, os, threading, traceback, sqlite3, datetime, statistics
+"""Forever Gold Companion 0.4 — PySide6 dark trading-terminal UI."""
+import csv
+import datetime as dt
+import os
+import statistics
+import sys
 from pathlib import Path
-import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
-from engine import PROFESSIONS, optimize, build_price_book
-from data_sources import fetch_recipes, recipes_for, fetch_auctions, latest_prices, auction_houses, oauth
+from concurrent.futures import ThreadPoolExecutor
 
-# Store data in a user-writable location when packaged as an exe.
-os.environ.setdefault('FOREVER_DB', str(Path.home() / 'ForeverProfessionOptimizer' / 'market.sqlite3'))
+from PySide6.QtCore import Qt, Signal, QObject
+from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QGridLayout, QLabel, QPushButton, QFrame, QLineEdit, QComboBox, QCheckBox,
+    QStackedWidget, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog,
+    QMessageBox, QAbstractItemView, QScrollArea)
+
+from engine import PROFESSIONS, optimize, build_price_book
+from data_sources import (fetch_recipes, recipes_for, fetch_auctions, latest_prices,
+                          auction_houses, oauth, connect)
+
+os.environ.setdefault('FOREVER_DB', str(Path.home() / 'ForeverGoldCompanion' / 'market.sqlite3'))
 Path(os.environ['FOREVER_DB']).parent.mkdir(parents=True, exist_ok=True)
 
-class App(tk.Tk):
- def __init__(self):
-  super().__init__(); self.title('Forever Gold Companion | EU PvP Alliance'); self.geometry('1040x740'); self.minsize(780,550)
-  self.result=None; self.house=tk.StringVar(value='110'); self.prof=tk.StringVar(value='tailoring'); self.start=tk.StringVar(value='1'); self.target=tk.StringVar(value='300'); self.verified=tk.BooleanVar(value=False)
-  self.fdb=tk.StringVar(); self.client=tk.StringVar(); self.secret=tk.StringVar(); self.status=tk.StringVar(value='Ready. Import Forever recipes and refresh AH prices to begin.')
-  tabs=ttk.Notebook(self); tabs.pack(fill='both',expand=True,padx=12,pady=10)
-  setup=ttk.Frame(tabs,padding=16); route=ttk.Frame(tabs,padding=16); tabs.add(setup,text='Connections & data'); tabs.add(route,text='Cheapest route'); market=ttk.Frame(tabs,padding=16); tabs.add(market,text='Market & deals')
-  for i,(label,var,hidden) in enumerate([('ForeverDB API key',self.fdb,True),('Blizzard client ID',self.client,False),('Blizzard client secret',self.secret,True),('Auction house ID (verify EU PvP Alliance)',self.house,False)]):
-   ttk.Label(setup,text=label).grid(row=i,column=0,sticky='w',pady=8)
-   ttk.Entry(setup,textvariable=var,show='*' if hidden else '',width=52).grid(row=i,column=1,sticky='ew',padx=12)
-  ttk.Button(setup,text='Discover AH IDs',command=self.discover).grid(row=4,column=0,pady=12,sticky='w')
-  ttk.Button(setup,text='Refresh AH snapshot',command=self.refresh).grid(row=4,column=1,pady=12,sticky='w')
-  ttk.Label(setup,text='Auction IDs and endpoints are unverified. Check the correct market before fetching.',wraplength=780).grid(row=5,column=0,columnspan=2,sticky='w')
-  ttk.Label(setup,text='Profession').grid(row=6,column=0,sticky='w',pady=12)
-  ttk.Combobox(setup,textvariable=self.prof,values=PROFESSIONS,state='readonly',width=30).grid(row=6,column=1,sticky='w')
-  ttk.Button(setup,text='Import profession recipes',command=self.import_recipes).grid(row=7,column=1,sticky='w')
-  ttk.Label(setup,text='Credentials are not saved. Price snapshots and recipes are stored locally in your user profile.',wraplength=800).grid(row=8,column=0,columnspan=2,sticky='w',pady=25)
-  setup.columnconfigure(1,weight=1)
-  top=ttk.Frame(route);top.pack(fill='x')
-  for label,var,w in [('Profession',self.prof,18),('From skill',self.start,8),('To skill',self.target,8)]:
-   ttk.Label(top,text=label).pack(side='left',padx=(0,5))
-   if label=='Profession':ttk.Combobox(top,textvariable=var,values=PROFESSIONS,state='readonly',width=w).pack(side='left',padx=(0,15))
-   else:ttk.Entry(top,textvariable=var,width=w).pack(side='left',padx=(0,15))
-  ttk.Checkbutton(route,text='Require Forever-verified trainer recipes',variable=self.verified).pack(anchor='w',pady=10)
-  ttk.Button(route,text='Calculate cheapest route',command=self.calculate).pack(anchor='w',pady=4)
-  self.summary=ttk.Label(route,text='No route calculated yet.',font=('Segoe UI',11,'bold'));self.summary.pack(anchor='w',pady=12)
-  ttk.Label(route,text='Crafting route').pack(anchor='w')
-  self.route_tree=self.make_table(route,('skill','recipe','crafts','gold'),('Skill range','Recipe','Expected crafts','Estimated gold'))
-  ttk.Label(route,text='Shopping list (item IDs)').pack(anchor='w',pady=(10,0))
-  self.shop_tree=self.make_table(route,('item','quantity','gold'),('Item ID','Buy quantity','Estimated gold'))
-  ttk.Button(route,text='Export route and shopping list as CSV',command=self.export).pack(anchor='w',pady=8)
-  # Market tools operate on imported or fetched snapshots; no fictional data.
-  ttk.Label(market,text='Market snapshots & vendor arbitrage',font=('Segoe UI',15,'bold')).pack(anchor='w')
-  ttk.Label(market,text='CSV columns: item_id,quantity,unit_copper. Values are COPPER per item. Use real exports only.',wraplength=820).pack(anchor='w',pady=6)
-  actions=ttk.Frame(market);actions.pack(fill='x',pady=8)
-  ttk.Button(actions,text='Import AH CSV',command=self.import_ah_csv).pack(side='left',padx=(0,10))
-  ttk.Button(actions,text='Import vendor values CSV',command=self.import_vendor_csv).pack(side='left',padx=(0,10))
-  ttk.Button(actions,text='Scan vendor deals',command=self.scan_vendor).pack(side='left',padx=(0,10))
-  ttk.Label(market,text='Vendor CSV columns: item_id,vendor_copper. Profits exclude travel/time costs.').pack(anchor='w')
-  self.vendor_tree=self.make_table(market,('item','buy','vendor','qty','profit'),('Item ID','Buyout / item (g)','Vendor / item (g)','Quantity','Total profit (g)'))
-  ttk.Label(market,text='Historical item prices (snapshots grouped by hour, UTC)').pack(anchor='w',pady=(10,2))
-  finder=ttk.Frame(market);finder.pack(fill='x')
-  self.market_item=tk.StringVar();ttk.Entry(finder,textvariable=self.market_item,width=18).pack(side='left')
-  ttk.Button(finder,text='Analyse item ID',command=self.market_history).pack(side='left',padx=8)
-  self.history_tree=self.make_table(market,('hour','observations','median','minimum'),('UTC hour','Snapshots','Median min buyout (g)','Lowest observed (g)'))
-  self.market_note=ttk.Label(market,text='No live data assumed. Repeated snapshots are needed to infer time-of-day patterns.',wraplength=850);self.market_note.pack(anchor='w',pady=5)
-  ttk.Label(self,textvariable=self.status,wraplength=1000).pack(fill='x',padx=15,pady=(0,12))
- def make_table(self,parent,keys,headers):
-  frame=ttk.Frame(parent);frame.pack(fill='both',expand=True,pady=4)
-  tree=ttk.Treeview(frame,columns=keys,show='headings',height=7)
-  for k,h in zip(keys,headers):tree.heading(k,text=h);tree.column(k,width=125 if k!='recipe' else 300)
-  scroll=ttk.Scrollbar(frame,orient='vertical',command=tree.yview);tree.configure(yscrollcommand=scroll.set)
-  tree.pack(side='left',fill='both',expand=True);scroll.pack(side='right',fill='y');return tree
- def run_job(self,desc,fn):
-  self.status.set(desc+' ...')
-  def work():
-   try:
-    result=fn();self.after(0,lambda:self.status.set(str(result)))
-   except Exception as exc:
-    msg=f'{type(exc).__name__}: {exc}';self.after(0,lambda:self.status.set(msg));self.after(0,lambda:messagebox.showerror('Request failed',msg))
-  threading.Thread(target=work,daemon=True).start()
- def discover(self):
-  def job():
-   houses=auction_houses(oauth(self.client.get(),self.secret.get()))
-   return 'Auction houses (verify faction and ruleset): '+', '.join(f"{x.get('id')} {x.get('name','')}" for x in houses)[:850]
-  self.run_job('Discovering auction houses',job)
- def refresh(self):
-  self.run_job('Fetching auction listings',lambda: 'Imported %s listings, snapshot %s'%fetch_auctions(self.client.get(),self.secret.get(),int(self.house.get())))
- def import_recipes(self):
-  self.run_job('Importing recipes',lambda:f"Imported {fetch_recipes(self.prof.get(),self.fdb.get())} recipes for {self.prof.get()}")
- def calculate(self):
-  try:
-   start,target=int(self.start.get()),int(self.target.get());house=int(self.house.get())
-   if not (1<=start<target<=300):raise ValueError('Choose skill range between 1 and 300, with target greater than start')
-   recipes=recipes_for(self.prof.get());prices,stamp=latest_prices(house)
-   if not recipes or not prices:raise ValueError('Import recipes and fetch an AH snapshot first')
-   result=optimize(recipes,build_price_book(prices),start,target,require_verified=self.verified.get())
-   if 'error' in result:raise ValueError(result['error'])
-   self.result=result
-   for tree in (self.route_tree,self.shop_tree):tree.delete(*tree.get_children())
-   for s in result['steps']:self.route_tree.insert('', 'end',values=(f"{s['from']}–{s['to']}",s['recipe'],f"{s['expected_crafts']:.1f}",f"{s['cost_copper']/10000:.2f}"))
-   for s in result['shopping']:self.shop_tree.insert('','end',values=(s['item_id'],s['buy_quantity'],f"{s['estimated_copper']/10000:.2f}"))
-   self.summary.config(text=f"Expected material cost: {result['expected_copper']/10000:,.2f} gold  |  {len(result['steps'])} crafting stages")
-   self.status.set('Calculated from cached snapshot '+str(stamp)+'. Skill-up chances approximate; total costs not guaranteed.')
-   if result['shortage']:messagebox.showwarning('Market depth','Not enough listings for some materials. Shopping costs may be incomplete.')
-  except Exception as e:messagebox.showerror('Cannot calculate',str(e))
- def import_ah_csv(self):
-  file=filedialog.askopenfilename(title='Select AH listings CSV',filetypes=[('CSV files','*.csv')]);
-  if not file:return
-  try:
-   rows=[]
-   with open(file,encoding='utf-8-sig',newline='') as f:
-    for r in csv.DictReader(f):
-     item=int(r['item_id']);qty=float(r['quantity']);price=float(r['unit_copper'])
-     if item>0 and qty>0 and price>0:rows.append((item,qty,price))
-   if not rows:raise ValueError('No valid listings')
-   from data_sources import connect
-   stamp=datetime.datetime.now(datetime.timezone.utc).isoformat();house=int(self.house.get())
-   with connect() as c:c.executemany('INSERT INTO prices VALUES (?,?,?,?,?)',[(house,stamp,*r) for r in rows])
-   self.status.set(f'Imported {len(rows)} real CSV listings at {stamp}. Market ID {house}.')
-  except Exception as e:messagebox.showerror('CSV import failed',str(e))
- def import_vendor_csv(self):
-  file=filedialog.askopenfilename(title='Select verified vendor sell values CSV',filetypes=[('CSV files','*.csv')]);
-  if not file:return
-  try:
-   from data_sources import connect
-   values=[]
-   with open(file,encoding='utf-8-sig',newline='') as f:
-    for r in csv.DictReader(f):
-     item=int(r['item_id']);price=float(r['vendor_copper'])
-     if item>0 and price>0:values.append((item,price))
-   with connect() as c:
-    c.execute('CREATE TABLE IF NOT EXISTS vendor_values (item_id INTEGER PRIMARY KEY, vendor_copper REAL)')
-    c.executemany('INSERT OR REPLACE INTO vendor_values VALUES (?,?)',values)
-   self.status.set(f'Imported {len(values)} verified vendor prices.')
-  except Exception as e:messagebox.showerror('Vendor CSV import failed',str(e))
- def scan_vendor(self):
-  try:
-   from data_sources import connect,latest_prices
-   rows,stamp=latest_prices(int(self.house.get()))
-   with connect() as c:
-    c.execute('CREATE TABLE IF NOT EXISTS vendor_values (item_id INTEGER PRIMARY KEY, vendor_copper REAL)')
-    values=dict(c.execute('SELECT item_id,vendor_copper FROM vendor_values').fetchall())
-   deals=[]
-   for r in rows:
-    vendor=values.get(r['item_id'],0)
-    if vendor>r['unit_copper']:
-     profit=(vendor-r['unit_copper'])*r['quantity']
-     deals.append((r['item_id'],r['unit_copper']/10000,vendor/10000,r['quantity'],profit/10000))
-   deals.sort(key=lambda r:r[4],reverse=True)
-   self.vendor_tree.delete(*self.vendor_tree.get_children())
-   for item,buy,vendor,qty,profit in deals[:500]:self.vendor_tree.insert('','end',values=(item,f'{buy:.4f}',f'{vendor:.4f}',f'{qty:g}',f'{profit:.4f}'))
-   self.status.set(f'{len(deals)} below-vendor listings found in snapshot {stamp or "none"}. Verify item variants and vendor values in game.')
-  except Exception as e:messagebox.showerror('Vendor scan failed',str(e))
- def market_history(self):
-  try:
-   item=int(self.market_item.get());house=int(self.house.get())
-   from data_sources import connect
-   with connect() as c:rows=c.execute('SELECT captured,MIN(unit_copper) FROM prices WHERE house=? AND item_id=? GROUP BY captured ORDER BY captured',(house,item)).fetchall()
-   buckets={}
-   for captured,price in rows:
-    hour=datetime.datetime.fromisoformat(captured).hour
-    buckets.setdefault(hour,[]).append(price/10000)
-   self.history_tree.delete(*self.history_tree.get_children())
-   for hour,prices in sorted(buckets.items()):self.history_tree.insert('','end',values=(f'{hour:02d}:00',len(prices),f'{statistics.median(prices):.4f}',f'{min(prices):.4f}'))
-   self.market_note.config(text=f'{len(rows)} snapshots for item {item}. Hours are UTC. These are observed listing prices, not completed sales; small samples are unreliable.')
-  except Exception as e:messagebox.showerror('History failed',str(e))
- def export(self):
-  if not self.result:return messagebox.showinfo('No route','Calculate a route first.')
-  folder=filedialog.askdirectory(title='Choose export folder')
-  if not folder:return
-  for name,rows in [('route',self.result['steps']),('shopping',self.result['shopping'])]:
-   with open(Path(folder)/f'forever_{name}.csv','w',newline='',encoding='utf-8-sig') as f:
-    writer=csv.DictWriter(f,fieldnames=list(rows[0]) if rows else []);writer.writeheader();writer.writerows(rows)
-  messagebox.showinfo('Exported','CSV files saved.')
+STYLE = '''
+QWidget { background: #0B1018; color: #DDE6F1; font-family: 'Segoe UI'; font-size: 12px; }
+QMainWindow, QScrollArea { background: #0B1018; }
+QFrame#sidebar { background: #101722; border-right: 1px solid #273347; }
+QFrame#panel { background: #141E2B; border: 1px solid #273347; border-radius: 12px; }
+QLabel#brand { color: #F4F7FB; font-size: 21px; font-weight: 800; }
+QLabel#muted { color: #92A3B9; }
+QLabel#heading { color: #F4F7FB; font-size: 25px; font-weight: 700; }
+QLabel#section { color: #F1F5FB; font-size: 15px; font-weight: 700; }
+QLabel#metric { color: #6BE2BA; font-size: 27px; font-weight: 800; }
+QLabel#eyebrow { color: #91A8C4; font-size: 11px; font-weight: 700; }
+QPushButton { background: #1C2A3B; border: 1px solid #34445B; border-radius: 8px;
+ padding: 10px 14px; color: #E7EFF9; font-weight: 600; text-align: center; }
+QPushButton:hover { background: #293D54; border-color: #5C7799; }
+QPushButton#primary { background: #16A37F; border-color: #16A37F; color: #071711; }
+QPushButton#primary:hover { background: #39C9A3; }
+QPushButton#nav { text-align: left; background: transparent; border: none; padding: 13px 17px;
+ color: #9AAEC5; font-size: 13px; }
+QPushButton#nav:hover { background: #1D2A3A; color: white; }
+QPushButton#nav[active="true"] { background: #1C3442; color: #78E5C4; border-left: 3px solid #43D8B0; border-radius: 0; }
+QLineEdit, QComboBox { background: #0E1621; border: 1px solid #34445B; border-radius: 7px;
+ padding: 9px 10px; color: #E8F0F9; min-height: 18px; }
+QLineEdit:focus, QComboBox:focus { border: 1px solid #49C9A6; }
+QComboBox QAbstractItemView { background: #172331; color: white; selection-background-color: #276957; }
+QTableWidget { background: #111A26; alternate-background-color: #152130; border: 1px solid #2C3A4C;
+ border-radius: 8px; gridline-color: #243144; selection-background-color: #235A52; }
+QHeaderView::section { background: #1C2A3B; color: #AFC0D5; border: none;
+ border-bottom: 1px solid #314157; padding: 10px; font-weight: 700; }
+QTableWidget::item { padding: 6px; }
+QCheckBox { spacing: 9px; }
+QScrollBar:vertical { background: #111A26; width: 10px; }
+QScrollBar::handle:vertical { background: #34465B; border-radius: 4px; }
+'''
 
-if __name__=='__main__':App().mainloop()
+class Bridge(QObject):
+    done = Signal(str)
+    failed = Signal(str)
+
+
+def text_label(text, kind=None, wrap=False):
+    label = QLabel(text)
+    if kind: label.setObjectName(kind)
+    label.setWordWrap(wrap)
+    return label
+
+
+def panel():
+    frame = QFrame(); frame.setObjectName('panel')
+    layout = QVBoxLayout(frame); layout.setContentsMargins(20, 18, 20, 20); layout.setSpacing(13)
+    return frame, layout
+
+
+def table(headers):
+    widget = QTableWidget(0, len(headers))
+    widget.setHorizontalHeaderLabels(headers)
+    widget.setAlternatingRowColors(True)
+    widget.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+    widget.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+    widget.verticalHeader().hide()
+    widget.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+    widget.setMinimumHeight(215)
+    return widget
+
+
+def fill_table(widget, rows):
+    widget.setRowCount(0)
+    for values in rows:
+        r = widget.rowCount(); widget.insertRow(r)
+        for col, value in enumerate(values):
+            cell = QTableWidgetItem(str(value))
+            if col: cell.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
+            widget.setItem(r, col, cell)
+
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle('Forever Gold Companion | Market Terminal')
+        self.resize(1240, 830); self.setMinimumSize(950, 650)
+        self.pool = ThreadPoolExecutor(max_workers=2)
+        self.bridge = Bridge()
+        self.bridge.done.connect(self.set_status)
+        self.bridge.failed.connect(self.show_error)
+        self.result = None
+        root = QWidget(); self.setCentralWidget(root)
+        outer = QHBoxLayout(root); outer.setContentsMargins(0,0,0,0); outer.setSpacing(0)
+        sidebar = QFrame(); sidebar.setObjectName('sidebar'); sidebar.setFixedWidth(236)
+        side = QVBoxLayout(sidebar); side.setContentsMargins(16,25,16,18); side.setSpacing(9)
+        side.addWidget(text_label('◈  FOREVER', 'brand'))
+        side.addWidget(text_label('GOLD COMPANION   /   v0.4', 'muted'))
+        side.addSpacing(28)
+        self.nav=[]
+        for i, (icon, name) in enumerate([('▦','Overview'),('▤','Profession planner'),('↗','Market scanner'),('◷','Price history'),('⚙','Connections')]):
+            b=QPushButton(f'{icon}   {name}'); b.setObjectName('nav'); b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.clicked.connect(lambda _, ix=i: self.go(ix)); side.addWidget(b); self.nav.append(b)
+        side.addStretch()
+        side.addWidget(text_label('EU PvP Alliance', 'section'))
+        side.addWidget(text_label('Market data: manual import or experimental API', 'muted', True))
+        side.addWidget(text_label('UNOFFICIAL COMMUNITY TOOL', 'eyebrow'))
+        outer.addWidget(sidebar)
+        right=QWidget(); main=QVBoxLayout(right); main.setContentsMargins(28,23,28,18); main.setSpacing(13)
+        top=QHBoxLayout(); top.addWidget(text_label('MARKET INTELLIGENCE  /  EU PVP', 'eyebrow')); top.addStretch()
+        self.data_indicator=text_label('●  No snapshot loaded', 'muted'); top.addWidget(self.data_indicator)
+        main.addLayout(top)
+        self.pages=QStackedWidget(); main.addWidget(self.pages, 1)
+        self.status=text_label('Ready. Import real auction CSV data or configure an experimental connection.', 'muted', True)
+        main.addWidget(self.status)
+        outer.addWidget(right,1)
+        self.make_overview(); self.make_professions(); self.make_market(); self.make_history(); self.make_connections()
+        self.go(0); self.update_overview()
+
+    def page(self, title, subtitle):
+        scroll=QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.Shape.NoFrame)
+        body=QWidget(); layout=QVBoxLayout(body); layout.setContentsMargins(2,4,2,8); layout.setSpacing(17)
+        layout.addWidget(text_label(title,'heading'))
+        layout.addWidget(text_label(subtitle,'muted',True))
+        scroll.setWidget(body); self.pages.addWidget(scroll)
+        return layout
+
+    def make_overview(self):
+        lay=self.page('Overview', 'Your auction intelligence workspace. All figures are sourced from locally stored snapshots.')
+        metrics=QHBoxLayout(); self.metrics=[]
+        for name in ['LATEST LISTINGS','UNIQUE ITEMS','CAPTURED (UTC)']:
+            box,l=panel(); l.addWidget(text_label(name,'eyebrow')); v=text_label('—','metric'); l.addWidget(v); metrics.addWidget(box); self.metrics.append(v)
+        lay.addLayout(metrics)
+        box,l=panel(); l.addWidget(text_label('START HERE','section'))
+        l.addWidget(text_label('1  Import an auction CSV (item_id, quantity, unit_copper).\n2  Import verified vendor values to scan for below-vendor deals.\n3  Add verified profession recipes to calculate levelling routes.\n4  Repeat imports over time to build an observed price history.','muted',True))
+        row=QHBoxLayout()
+        for title,fn in [('Import auction CSV',self.import_ah),('Open market scanner',lambda:self.go(2)),('Configure sources',lambda:self.go(4))]:
+            b=QPushButton(title); b.clicked.connect(fn); row.addWidget(b)
+        l.addLayout(row); lay.addWidget(box)
+        box,l=panel(); l.addWidget(text_label('DATA INTEGRITY','section'))
+        l.addWidget(text_label('No simulated market values are displayed. Listings are asking prices, not completed sales. Blizzard/ForeverDB integrations are experimental and require verification for Forever realms.','muted',True))
+        lay.addWidget(box); lay.addStretch()
+
+    def make_professions(self):
+        lay=self.page('Profession planner', 'Estimate the cheapest levelling route from imported recipes and your current auction snapshot.')
+        box,l=panel(); grid=QGridLayout();
+        self.prof=QComboBox(); self.prof.addItems(PROFESSIONS)
+        self.start=QLineEdit('1'); self.target=QLineEdit('300')
+        self.verified=QCheckBox('Require verified trainer recipes')
+        for i,(name,widget) in enumerate([('Profession',self.prof),('Current skill',self.start),('Target skill',self.target)]):
+            grid.addWidget(text_label(name,'eyebrow'),0,i); grid.addWidget(widget,1,i)
+        l.addLayout(grid); l.addWidget(self.verified)
+        btn=QPushButton('Calculate cheapest route'); btn.setObjectName('primary'); btn.clicked.connect(self.calculate); l.addWidget(btn)
+        lay.addWidget(box)
+        self.route_summary=text_label('No route calculated yet.','section'); lay.addWidget(self.route_summary)
+        box,l=panel(); l.addWidget(text_label('CRAFTING ROUTE','section'))
+        self.route_table=table(['Skill range','Recipe','Expected crafts','Cost (gold)']); l.addWidget(self.route_table); lay.addWidget(box)
+        box,l=panel(); l.addWidget(text_label('SHOPPING LIST','section'))
+        self.shop_table=table(['Item ID','Buy quantity','Estimated gold']); l.addWidget(self.shop_table)
+        export=QPushButton('Export route + shopping CSV'); export.clicked.connect(self.export); l.addWidget(export)
+        lay.addWidget(box)
+
+    def make_market(self):
+        lay=self.page('Market scanner', 'Spot auction listings priced below verified vendor sell values.')
+        box,l=panel(); row=QHBoxLayout()
+        for name,fn in [('Import AH CSV',self.import_ah),('Import vendor CSV',self.import_vendor),('Scan vendor flips',self.scan_vendor)]:
+            b=QPushButton(name); b.clicked.connect(fn); row.addWidget(b)
+        l.addLayout(row); l.addWidget(text_label('Auction CSV: item_id,quantity,unit_copper  •  Vendor CSV: item_id,vendor_copper. All source values must be in copper.','muted',True)); lay.addWidget(box)
+        box,l=panel(); l.addWidget(text_label('BELOW-VENDOR OPPORTUNITIES','section'))
+        self.deal_table=table(['Item ID','AH / item (g)','Vendor / item (g)','Quantity','Potential profit (g)'])
+        l.addWidget(self.deal_table); lay.addWidget(box)
+        lay.addWidget(text_label('Potential profit ignores travel, auction rules, and availability changes. Verify values before purchasing.','muted',True))
+
+    def make_history(self):
+        lay=self.page('Price history', 'Observed minimum buyouts grouped by capture hour (UTC).')
+        box,l=panel(); row=QHBoxLayout(); self.history_item=QLineEdit(); self.history_item.setPlaceholderText('Enter item ID')
+        row.addWidget(self.history_item,1); b=QPushButton('Analyse item'); b.setObjectName('primary'); b.clicked.connect(self.history); row.addWidget(b); l.addLayout(row)
+        l.addWidget(text_label('More snapshots improve time-of-day comparisons. This is not completed-sales data.','muted',True)); lay.addWidget(box)
+        box,l=panel(); l.addWidget(text_label('HOURLY PRICE OBSERVATIONS','section'))
+        self.history_table=table(['UTC hour','Snapshots','Median min (g)','Lowest observed (g)']); l.addWidget(self.history_table); lay.addWidget(box)
+        self.history_note=text_label('No item selected.','muted'); lay.addWidget(self.history_note)
+
+    def make_connections(self):
+        lay=self.page('Connections & data', 'Import actual data locally. Experimental APIs are optional and not yet confirmed for WoW Forever.')
+        box,l=panel(); grid=QGridLayout()
+        self.house=QLineEdit('110'); self.key=QLineEdit(); self.key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.client=QLineEdit(); self.secret=QLineEdit(); self.secret.setEchoMode(QLineEdit.EchoMode.Password)
+        for i,(name,widget) in enumerate([('Auction house ID (verify before use)',self.house),('ForeverDB API key',self.key),('Blizzard client ID',self.client),('Blizzard client secret',self.secret)]):
+            grid.addWidget(text_label(name,'eyebrow'),i,0); grid.addWidget(widget,i,1)
+        l.addLayout(grid)
+        for name,fn in [('Discover AH IDs (experimental)',self.discover),('Refresh auction snapshot (experimental)',self.refresh),('Import profession recipes (experimental)',self.import_recipes)]:
+            b=QPushButton(name); b.clicked.connect(fn); l.addWidget(b)
+        l.addWidget(text_label('Credentials are not saved. The auction endpoints, namespace, realm mapping, and ForeverDB response format have not been independently validated. Never distribute your personal API secret in a public build.','muted',True))
+        lay.addWidget(box); lay.addStretch()
+
+    def go(self,index):
+        self.pages.setCurrentIndex(index)
+        for i,b in enumerate(self.nav):
+            b.setProperty('active','true' if i==index else 'false'); b.style().unpolish(b); b.style().polish(b)
+        if index==0:self.update_overview()
+
+    def set_status(self,msg):
+        self.status.setText(msg); self.update_overview()
+
+    def show_error(self,msg):
+        self.status.setText('Error: '+msg)
+        QMessageBox.warning(self,'Operation failed',msg)
+
+    def job(self,description,func):
+        self.status.setText(description+' …')
+        def runner():
+            try: self.bridge.done.emit(str(func()))
+            except Exception as e: self.bridge.failed.emit(f'{type(e).__name__}: {e}')
+        self.pool.submit(runner)
+
+    def house_id(self):
+        val=int(self.house.text());
+        if val<=0:raise ValueError('Auction house ID must be positive')
+        return val
+
+    def update_overview(self):
+        try:
+            rows,stamp=latest_prices(self.house_id())
+            self.metrics[0].setText(f'{len(rows):,}')
+            self.metrics[1].setText(f'{len({r["item_id"] for r in rows}):,}')
+            self.metrics[2].setText(stamp[:16].replace('T',' ') if stamp else '—')
+            self.data_indicator.setText('●  Snapshot loaded' if stamp else '●  No snapshot loaded')
+        except Exception: pass
+
+    def import_ah(self):
+        path,_=QFileDialog.getOpenFileName(self,'Import auction listings CSV','','CSV files (*.csv)')
+        if not path:return
+        try:
+            records=[]
+            with open(path,encoding='utf-8-sig',newline='') as file:
+                for row in csv.DictReader(file):
+                    item=int(row['item_id']); qty=float(row['quantity']); price=float(row['unit_copper'])
+                    if item>0 and qty>0 and price>0:records.append((item,qty,price))
+            if not records:raise ValueError('No valid listings found')
+            stamp=dt.datetime.now(dt.timezone.utc).isoformat(); house=self.house_id()
+            with connect() as db: db.executemany('INSERT INTO prices VALUES (?,?,?,?,?)',[(house,stamp,*r) for r in records])
+            self.set_status(f'Imported {len(records):,} listings at {stamp} (AH {house}).')
+        except Exception as e:self.show_error(str(e))
+
+    def import_vendor(self):
+        path,_=QFileDialog.getOpenFileName(self,'Import vendor values CSV','','CSV files (*.csv)')
+        if not path:return
+        try:
+            values=[]
+            with open(path,encoding='utf-8-sig',newline='') as file:
+                for row in csv.DictReader(file):
+                    item=int(row['item_id']); price=float(row['vendor_copper'])
+                    if item>0 and price>0:values.append((item,price))
+            with connect() as db:
+                db.execute('CREATE TABLE IF NOT EXISTS vendor_values (item_id INTEGER PRIMARY KEY, vendor_copper REAL)')
+                db.executemany('INSERT OR REPLACE INTO vendor_values VALUES (?,?)',values)
+            self.set_status(f'Imported {len(values):,} verified vendor values.')
+        except Exception as e:self.show_error(str(e))
+
+    def scan_vendor(self):
+        try:
+            rows,stamp=latest_prices(self.house_id())
+            with connect() as db:
+                db.execute('CREATE TABLE IF NOT EXISTS vendor_values (item_id INTEGER PRIMARY KEY, vendor_copper REAL)')
+                vendors=dict(db.execute('SELECT item_id,vendor_copper FROM vendor_values').fetchall())
+            deals=[]
+            for row in rows:
+                vendor=vendors.get(row['item_id'],0)
+                if vendor>row['unit_copper']:
+                    profit=(vendor-row['unit_copper'])*row['quantity']/10000
+                    deals.append((row['item_id'],f'{row["unit_copper"]/10000:.4f}',f'{vendor/10000:.4f}',f'{row["quantity"]:g}',f'{profit:.4f}'))
+            deals.sort(key=lambda r:float(r[4]),reverse=True)
+            fill_table(self.deal_table,deals[:500]); self.set_status(f'{len(deals):,} below-vendor listings in snapshot {stamp or "none"}.')
+        except Exception as e:self.show_error(str(e))
+
+    def calculate(self):
+        try:
+            start=int(self.start.text()); target=int(self.target.text())
+            if not 1<=start<target<=300:raise ValueError('Skill must satisfy 1 ≤ current < target ≤ 300')
+            recipes=recipes_for(self.prof.currentText()); prices,stamp=latest_prices(self.house_id())
+            if not recipes or not prices:raise ValueError('Import profession recipes and an auction snapshot first')
+            result=optimize(recipes,build_price_book(prices),start,target,require_verified=self.verified.isChecked())
+            if 'error' in result:raise ValueError(result['error'])
+            self.result=result
+            fill_table(self.route_table,[(f'{s["from"]}–{s["to"]}',s['recipe'],f'{s["expected_crafts"]:.1f}',f'{s["cost_copper"]/10000:.2f}') for s in result['steps']])
+            fill_table(self.shop_table,[(s['item_id'],s['buy_quantity'],f'{s["estimated_copper"]/10000:.2f}') for s in result['shopping']])
+            self.route_summary.setText(f'Estimated cost  {result["expected_copper"]/10000:,.2f} gold    •    {len(result["steps"])} stages')
+            self.set_status(f'Calculated from {stamp}. Skill-up probabilities are estimates, not guarantees.')
+            if result['shortage']:QMessageBox.warning(self,'Limited market depth','Not enough listings to buy all estimated materials.')
+        except Exception as e:self.show_error(str(e))
+
+    def history(self):
+        try:
+            item=int(self.history_item.text()); house=self.house_id()
+            with connect() as db:
+                rows=db.execute('SELECT captured, MIN(unit_copper) FROM prices WHERE house=? AND item_id=? GROUP BY captured ORDER BY captured',(house,item)).fetchall()
+            buckets={}
+            for captured,price in rows:
+                hour=dt.datetime.fromisoformat(captured).hour
+                buckets.setdefault(hour,[]).append(price/10000)
+            fill_table(self.history_table,[(f'{h:02d}:00',len(v),f'{statistics.median(v):.4f}',f'{min(v):.4f}') for h,v in sorted(buckets.items())])
+            self.history_note.setText(f'{len(rows)} snapshots for item {item}. Observed listings, not completed sales.')
+            self.set_status(f'Loaded hourly history for item {item}.')
+        except Exception as e:self.show_error(str(e))
+
+    def export(self):
+        if not self.result:return self.show_error('Calculate a route before exporting.')
+        folder=QFileDialog.getExistingDirectory(self,'Export route and shopping list')
+        if not folder:return
+        try:
+            for name,rows in [('route',self.result['steps']),('shopping',self.result['shopping'])]:
+                with open(Path(folder)/f'forever_{name}.csv','w',encoding='utf-8-sig',newline='') as f:
+                    if rows:
+                        writer=csv.DictWriter(f,fieldnames=list(rows[0]));writer.writeheader();writer.writerows(rows)
+            self.set_status('Route and shopping CSV files exported.')
+        except Exception as e:self.show_error(str(e))
+
+    def discover(self):
+        client=self.client.text();secret=self.secret.text()
+        self.job('Discovering AH IDs',lambda:'AH IDs (verify realm): '+str(auction_houses(oauth(client,secret)))[:700])
+
+    def refresh(self):
+        client=self.client.text();secret=self.secret.text()
+        try:house=self.house_id()
+        except Exception as e:return self.show_error(str(e))
+        self.job('Refreshing auction snapshot',lambda:'Imported %s listings at %s'%fetch_auctions(client,secret,house))
+
+    def import_recipes(self):
+        profession=self.prof.currentText();key=self.key.text()
+        self.job('Importing profession recipes',lambda:f'Imported {fetch_recipes(profession,key)} recipes for {profession}.')
+
+    def closeEvent(self,event):
+        self.pool.shutdown(wait=False,cancel_futures=True)
+        super().closeEvent(event)
+
+
+def main():
+    app=QApplication(sys.argv); app.setStyle('Fusion'); app.setStyleSheet(STYLE)
+    win=MainWindow();win.show()
+    sys.exit(app.exec())
+
+if __name__=='__main__':main()

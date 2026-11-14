@@ -1,34 +1,23 @@
-# Forever Gold Companion — Windows Community Build v0.3 (prototype)
+# Forever Gold Companion v0.4 — Dark Trading Terminal
 
-A Windows desktop auction and profession research tool. **No Python installation is required by end users once the Windows installer has been built.**
+A PySide6 desktop redesign of Forever Gold Companion for Windows. This is a **prototype** with a dark trading-terminal interface, left navigation, market overview, profession planner, vendor scanner, price history and experimental data connections.
 
-## For players
-Download `ForeverGoldCompanion_Setup_0.3.0.exe` from a successful GitHub Actions build (or a future GitHub Release), run the installer, and launch from Start Menu. Windows SmartScreen may warn about an unsigned community application; do not bypass security warnings unless you trust the source and have verified the release.
+## Community Windows installer (no Python needed for players)
 
-## For maintainers: building the installer
-Upload these source files **including `.github/workflows/windows-release.yml`** to a GitHub repository. Open **Actions → Build Windows installer → Run workflow**. After the Windows job finishes, download the `ForeverGoldCompanion-Windows` artifact. The artifact contains a portable executable and a conventional installer. The GitHub-hosted Windows runner installs Python and packaging tools *during the build only*; players do not need them.
+Upload the contents of this archive to the GitHub repository, including `.github/workflows/windows-release.yml`. Run **Actions → Build Windows installer → Run workflow**. Once green, download the `ForeverGoldCompanion-Windows` artifact, extract it and run `ForeverGoldCompanion_Setup_0.4.0.exe`. Python and PySide6 are bundled by PyInstaller on GitHub's Windows build machine. No Python installation is needed by players.
 
-**Current status:** This is a build-ready source package, not an already compiled Windows installer. The CI build has not been executed or tested here.
+**Do not upload this ZIP as a single file**; extract and upload its contents while retaining the directory structure. Replace old files when GitHub asks.
 
-## Included functionality
-- Native desktop window (tkinter)
-- Import actual auction listings and verified vendor prices from CSV
-- Local SQLite history and vendor arbitrage scanner
-- Hour-of-day observed listing price summary
-- Profession route estimate and shopping list, when valid recipe data is supplied
-- Experimental Blizzard/ForeverDB connectors (unverified)
+## Maintainer testing
 
-## Important limitations
-Live WoW Forever auction endpoints, market mapping, ForeverDB response format, trainer availability, vendor metadata, and skill-up probabilities are **not yet validated**. Never treat sample screenshots as live data. The profession engine is a preliminary expected-cost model, not a fully inventory-aware global optimiser. It requires data; it does not ship a verified Forever recipe database.
+`python -m unittest discover -s tests -v`
 
-## Privacy and public distribution
-**Do not embed a personal Blizzard Client Secret or ForeverDB API key in a public executable or repository.** Current connection fields accept credentials entered by the player at runtime; credentials are not persisted. A truly zero-configuration community release would require an approved, terms-compliant shared data service.
+`python desktop.py` (requires dependencies installed)
 
-## Credits
-Forever-specific recipe and item data is intended to be sourced from [ForeverDB.net](https://foreverdb.net), subject to their approval, availability, attribution and API rules. This project is unofficial and not endorsed by Blizzard.
+## Current limitations
 
-## Testing
-`python -m unittest discover -s tests -v` for maintainers. Windows UI and API integrations still need real-world testing.
+The Windows GUI has not been visually tested on a Windows machine in this environment. The Forever-specific Blizzard/ForeverDB API paths and data formats remain **unverified**. This app does not ship with real AH prices, verified profession recipe coverage, or a public zero-config API backend. Do not bundle personal API secrets. The optimizer is an expected-cost model and cannot guarantee skill-ups or exact shopping costs. Auction listings are not actual sales.
 
-## Installer note
-The installer targets the current user’s LocalAppData Programs folder, avoiding administrator permissions. Windows binaries are produced by the GitHub Actions workflow, not included in this source archive.
+The app stores local SQLite data in `%USERPROFILE%\ForeverGoldCompanion\market.sqlite3`; it does not persist entered API credentials.
+
+Unofficial community project, not affiliated with Blizzard or ForeverDB.
