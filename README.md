@@ -1,30 +1,31 @@
-# Forever Gold Companion
+# Forever Gold Companion — Windows Community Build v0.3 (prototype)
 
-**Unofficial Windows desktop app prototype for World of Warcraft Forever.** Initially targeting **EU PvP Alliance**.
+A Windows desktop auction and profession research tool. **No Python installation is required by end users once the Windows installer has been built.**
 
-The goal is to calculate affordable profession levelling routes using Forever-specific standard-trainer recipes and auction prices, and to identify gold-making opportunities.
+## For players
+Download `ForeverGoldCompanion_Setup_0.3.0.exe` from a successful GitHub Actions build (or a future GitHub Release), run the installer, and launch from Start Menu. Windows SmartScreen may warn about an unsigned community application; do not bypass security warnings unless you trust the source and have verified the release.
 
-## Planned features
-- Cheapest profession levelling route and consolidated material shopping list
-- Historical auction prices, hourly and day-of-week market patterns
-- Deals compared with historical prices and liquidity
-- Vendor arbitrage (buyout below NPC sell price)
-- Crafting profitability, watchlists, and CSV exports
+## For maintainers: building the installer
+Upload these source files **including `.github/workflows/windows-release.yml`** to a GitHub repository. Open **Actions → Build Windows installer → Run workflow**. After the Windows job finishes, download the `ForeverGoldCompanion-Windows` artifact. The artifact contains a portable executable and a conventional installer. The GitHub-hosted Windows runner installs Python and packaging tools *during the build only*; players do not need them.
 
-## Technology
-Planned: Python, PySide6, SQLite, and a standalone Windows executable.
+**Current status:** This is a build-ready source package, not an already compiled Windows installer. The CI build has not been executed or tested here.
 
-## Status
-**Early prototype.** Live API access, recipe coverage, auction-house IDs, vendor values and skill-up probabilities have not yet been validated. Demonstration prices are fictional.
+## Included functionality
+- Native desktop window (tkinter)
+- Import actual auction listings and verified vendor prices from CSV
+- Local SQLite history and vendor arbitrage scanner
+- Hour-of-day observed listing price summary
+- Profession route estimate and shopping list, when valid recipe data is supplied
+- Experimental Blizzard/ForeverDB connectors (unverified)
 
-## Data providers and attribution
-We are seeking access to [ForeverDB.net](https://foreverdb.net) for Forever-specific recipes, reagent requirements, trainer availability, skill thresholds and item metadata. ForeverDB.net will be visibly credited with a clickable link wherever its data is displayed, subject to its API terms and approval.
+## Important limitations
+Live WoW Forever auction endpoints, market mapping, ForeverDB response format, trainer availability, vendor metadata, and skill-up probabilities are **not yet validated**. Never treat sample screenshots as live data. The profession engine is a preliminary expected-cost model, not a fully inventory-aware global optimiser. It requires data; it does not ship a verified Forever recipe database.
 
-We intend to use Blizzard's developer API for auction data **if Forever endpoints are verified and supported**. Credentials will remain on the user's PC and will not be committed to this repository.
+## Privacy and public distribution
+**Do not embed a personal Blizzard Client Secret or ForeverDB API key in a public executable or repository.** Current connection fields accept credentials entered by the player at runtime; credentials are not persisted. A truly zero-configuration community release would require an approved, terms-compliant shared data service.
 
-This project is not affiliated with or endorsed by Blizzard Entertainment.
+## Credits
+Forever-specific recipe and item data is intended to be sourced from [ForeverDB.net](https://foreverdb.net), subject to their approval, availability, attribution and API rules. This project is unofficial and not endorsed by Blizzard.
 
-See [ROADMAP.md](ROADMAP.md) and [data sources](docs/DATA_SOURCES.md).
-
-## License
-No open-source license has been granted at this stage.
+## Testing
+`python -m unittest discover -s tests -v` for maintainers. Windows UI and API integrations still need real-world testing.
